@@ -1,0 +1,63 @@
+name: Sync Market & SEC 8-K Data and Deploy Pages
+
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    # 每小时第 12 分钟自动抓取最新行情与 SEC 8-K 并重新发布网页（公开库完全免费不限时长）
+    - cron: '12 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-sync-deploy"
+  cancel-in-progress: false
+
+jobs:
+  sync-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Sync Live STRC/MSTR/BTC Quotes & SEC 8-K Filings
+        run: |
+          python3 scripts/sync_data.py
+
+      - name: Commit updated data.json if changed
+        run: |
+          if ! git diff --quiet docs/data.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/data.json
+            git commit -m "chore(data): auto-sync market quotes and SEC 8-K [skip ci]"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          fi
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './docs'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STRC 波段套利与回购筹资能力实时雷达</title>
+  <meta name="description" content="全自动追踪 Strategy (MSTR) 优先股 STRC 折价空间、MSTR mNAV 筹资能力、BTC 价格与每周 SEC 8-K 回购数据的实时决策面板" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg: #090e1a;
+      --surface: #111827;
+      --surface-2: #1a2336;
+      --border: rgba(148, 163, 184, 0.16);
+      --fg: #f1f5f9;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background-color: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+    input[type="range"] { height: 6px; border-radius: 999px; cursor: pointer; }
+    .thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .thin-scroll::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 999px; }
+  </style>
+</head>
+<body class="antialiased min-h-screen p-3.5 sm:p-6">
+  <div class="max-w-7xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+      <div>
+        <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-100">
+          STRC 波段套利与回购筹资能力实时雷达
+        </h1>
+        <p class="text-xs text-slate-400 mt-1">
+          云端每小时自动同步 NASDAQ 行情与 SEC EDGAR <code class="text-slate-300">Form 8-K</code>（零手动录入）｜核心策略：盯紧筹资信号买折价，回购推升至 $97.5–$99 止盈
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2.5 text-xs">
+        <div class="px-2.5 py-1.5 rounded-md bg-slate-900 border border-slate-800 text-slate-300 flex items-center gap-2">
+          <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span id="syncTimeLabel">云端同步时间：加载中...</span>
+        </div>
+        <button id="btnRefresh" type="button" class="px-3 py-1.5 rounded-md font-medium bg-sky-600 hover:bg-sky-500 text-white transition">
+          刷新实时数据
+        </button>
+      </div>
+    </header>
+
+    <!-- Actionable Wave-Trading Banner -->
+    <section id="signalBanner" class="rounded-xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+        <div class="lg:col-span-7 space-y-1.5">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium uppercase tracking-wider text-slate-400">当前波段作战判定</span>
+            <span id="sigPhaseBadge" class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/15 text-amber-400">计算中...</span>
+          </div>
+          <h2 id="sigHeadline" class="text-lg sm:text-xl font-semibold text-slate-100">正在分析筹资通道与折价赔率...</h2>
+          <p id="sigReason" class="text-xs sm:text-sm text-slate-400 leading-relaxed"></p>
+        </div>
+
+        <div class="lg:col-span-5 grid grid-cols-3 gap-2.5 text-center bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
+          <div>
+            <div class="text-xs text-slate-400">STRC 实时价</div>
+            <div id="heroStrcPrice" class="text-lg sm:text-xl font-bold text-amber-400 mt-0.5">--</div>
+            <div id="heroEffYield" class="text-xs text-slate-400">息率 --</div>
+          </div>
+          <div class="border-x border-slate-800 px-1">
+            <div class="text-xs text-slate-400">涨回 $98 纯价差</div>
+            <div id="heroSpread98" class="text-lg sm:text-xl font-bold text-emerald-400 mt-0.5">--</div>
+            <div id="heroTotal60d" class="text-xs text-slate-400">含60天息 --</div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-400">筹资火力指数</div>
+            <div id="heroFirepower" class="text-lg sm:text-xl font-bold text-sky-400 mt-0.5">--</div>
+            <div id="heroSafety" class="text-xs text-emerald-400">利息垫 -- 年</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4-Pillar Funding Firepower Monitor ("他们能筹集到资金回购吗？") -->
+    <section class="space-y-2.5">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-slate-200">一、回购筹资四大通道实时状态（决定是否有买盘把 STRC 推回 $98+）</h2>
+        <span id="last8kBadge" class="text-xs text-slate-400">最新 8-K 披露：--</span>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <!-- Channel 1: MSTR ATM -->
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 font-medium">① MSTR 印股筹资通道 (占90%)</span>
+            <span id="ch1Status" class="px-1.5 py-0.5 rounded font-medium">--</span>
+          </div>
+          <div class="flex items-baseline justify-between">
+            <span id="ch1Mnav" class="text-2xl font-semibold text-sky-400">--</span>
+            <span id="ch1Mstr" class="text-xs text-slate-400">MSTR $--</span>
+          </div>
+          <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div id="ch1Bar" class="h-full bg-sky-500 rounded-full transition-all" style="width: 50%"></div>
+          </div>
+          <p id="ch1Desc" class="text-xs text-slate-400 leading-relaxed"></p>
+        </div>
+
+        <!-- Channel 2: Repurchase Auth Cap -->
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 font-medium">② 董事会回购剩余授权</span>
+            <span id="ch2Status" class="px-1.5 py-0.5 rounded font-medium">--</span>
+          </div>
+          <div class="flex items-baseline justify-between">
+            <span id="ch2Rem" class="text-2xl font-semibold text-slate-100">--</span>
+            <span id="ch2Total" class="text-xs text-slate-400">总额 $--亿</span>
+          </div>
+          <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div id="ch2Bar" class="h-full bg-amber-500 rounded-full transition-all" style="width: 88%"></div>
+          </div>
+          <p id="ch2Desc" class="text-xs text-slate-400 leading-relaxed"></p>
+        </div>
+
+        <!-- Channel 3: USD Cash + Interest -->
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 font-medium">③ 自由现金池 (USD Cash)</span>
+            <span id="ch3Status" class="px-1.5 py-0.5 rounded font-medium">--</span>
+          </div>
+          <div class="flex items-baseline justify-between">
+            <span id="ch3Cash" class="text-2xl font-semibold text-slate-100">--</span>
+            <span id="ch3Reserve" class="text-xs text-emerald-400">隔离付息池 $--亿</span>
+          </div>
+          <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div id="ch3Bar" class="h-full bg-emerald-500 rounded-full transition-all" style="width: 25%"></div>
+          </div>
+          <p id="ch3Desc" class="text-xs text-slate-400 leading-relaxed"></p>
+        </div>
+
+        <!-- Channel 4: BTC Treasury & Monetization -->
+        <div class="bg-slate-900 border border-slate-800 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 font-medium">④ BTC 储备兜底与卖币开关</span>
+            <span id="ch4Status" class="px-1.5 py-0.5 rounded font-medium">--</span>
+          </div>
+          <div class="flex items-baseline justify-between">
+            <span id="ch4Btc" class="text-2xl font-semibold text-teal-400">--</span>
+            <span id="ch4Holdings" class="text-xs text-slate-400">-- 枚无质押</span>
+          </div>
+          <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div id="ch4Bar" class="h-full bg-teal-500 rounded-full transition-all" style="width: 75%"></div>
+          </div>
+          <p id="ch4Desc" class="text-xs text-slate-400 leading-relaxed"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Unified Interactive Chart -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+      <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-xs font-medium text-slate-400 mr-1">观察窗口：</span>
+          <button data-range="all" class="range-btn px-2.5 py-1 rounded text-xs font-medium bg-sky-600 text-white transition">2026 全景</button>
+          <button data-range="wave1" class="range-btn px-2.5 py-1 rounded text-xs font-medium border border-slate-700 text-slate-300 hover:text-white transition">上轮买点复盘 (6月崩盘→9月止盈)</button>
+          <button data-range="recent" class="range-btn px-2.5 py-1 rounded text-xs font-medium border border-slate-700 text-slate-300 hover:text-white transition">近期放大 (9月底至今)</button>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+          <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" id="chkStrc" checked class="accent-amber-500" />
+            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span>STRC 股价
+          </label>
+          <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" id="chkMnav" checked class="accent-sky-500" />
+            <span class="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block"></span>MSTR mNAV 溢价
+          </label>
+          <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" id="chkBtc" checked class="accent-teal-500" />
+            <span class="w-2.5 h-2.5 rounded-full bg-teal-400 inline-block"></span>BTC 价格
+          </label>
+          <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" id="chkBands" checked class="accent-emerald-500" />
+            <span>波段止盈/击球带</span>
+          </label>
+          <div class="inline-flex rounded border border-slate-700 overflow-hidden">
+            <button id="subModeBuyback" type="button" class="px-2 py-0.5 text-xs font-medium bg-slate-800 text-white">副图：周回购 &amp; 授权阶梯</button>
+            <button id="subModeSupply" type="button" class="px-2 py-0.5 text-xs font-medium text-slate-400 hover:text-white">副图：流通盘缩表</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Crosshair Readout -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 px-3 py-2 rounded-lg bg-slate-950/80 border border-slate-800/80 text-xs">
+        <div><span class="text-slate-400">日期：</span><strong id="roDate" class="text-slate-100">--</strong></div>
+        <div><span class="text-slate-400">STRC：</span><strong id="roStrc" class="text-amber-400">--</strong></div>
+        <div><span class="text-slate-400">距$98空间：</span><strong id="roUpside98" class="text-emerald-400">--</strong></div>
+        <div><span class="text-slate-400">MSTR / mNAV：</span><strong id="roMnav" class="text-sky-400">--</strong></div>
+        <div><span class="text-slate-400">BTC：</span><strong id="roBtc" class="text-teal-400">--</strong></div>
+        <div><span class="text-slate-400">周回购 / 授权：</span><strong id="roBuy" class="text-slate-200">--</strong></div>
+      </div>
+
+      <!-- Canvas -->
+      <div id="chartContainer" class="relative w-full select-none" style="height: 490px;">
+        <canvas id="mainCanvas" class="w-full h-full block cursor-crosshair"></canvas>
+        <div id="noteToast" class="hidden absolute top-2 left-12 right-12 z-10 px-3 py-2 rounded-md bg-slate-900/95 border border-slate-700 text-xs text-slate-200 flex items-center justify-between gap-2 shadow-lg">
+          <span id="noteToastText"></span>
+          <button id="closeToast" type="button" class="text-slate-400 hover:text-white">✕</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Wave Trade Profit Calculator + Automated 8-K Ledger -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <!-- Left: Quick Wave Profit Simulator -->
+      <section class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3.5">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-100">二、波段买卖空间速算器</h2>
+          <p class="text-xs text-slate-400 mt-0.5">模拟“折价买入 → 等公司筹资回购推回目标价卖出”的价差 + 持仓日息总回报</p>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-slate-400">计划买入价 ($)</span>
+              <strong id="calcBuyLbl" class="text-amber-400">$93.60</strong>
+            </div>
+            <input id="calcBuy" type="range" min="74" max="98" step="0.1" value="93.6" class="w-full accent-amber-500" />
+          </div>
+
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-slate-400">计划波段卖出价 ($)</span>
+              <strong id="calcSellLbl" class="text-emerald-400">$98.00</strong>
+            </div>
+            <input id="calcSell" type="range" min="90" max="100.5" step="0.1" value="98.0" class="w-full accent-emerald-500" />
+          </div>
+
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-slate-400">预计等待回购拉升天数</span>
+              <strong id="calcDaysLbl" class="text-sky-400">45 天</strong>
+            </div>
+            <input id="calcDays" type="range" min="7" max="180" step="1" value="45" class="w-full accent-sky-500" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5 pt-2 border-t border-slate-800 text-xs">
+          <div class="p-3 rounded-lg bg-slate-950/70 border border-slate-800/80">
+            <div class="text-slate-400">波段价差收益</div>
+            <div id="calcCapPct" class="text-lg font-bold text-emerald-400 mt-0.5">+4.70%</div>
+            <div id="calcCapUsd" class="text-slate-400">每股赚 +$4.40</div>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-950/70 border border-slate-800/80">
+            <div class="text-slate-400">期间累计现金日息</div>
+            <div id="calcDivPct" class="text-lg font-bold text-amber-400 mt-0.5">+1.58%</div>
+            <div id="calcDivUsd" class="text-slate-400">每股收息 +$1.48</div>
+          </div>
+          <div class="col-span-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
+            <div>
+              <div class="text-emerald-300 font-medium">单笔波段总收益率（含息）</div>
+              <div id="calcAnnNote" class="text-slate-400 mt-0.5">折合年化回报率 --</div>
+            </div>
+            <div id="calcTotalPct" class="text-2xl font-bold text-emerald-400">+6.28%</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Zero-Touch Automated SEC Form 8-K Ledger -->
+      <section class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-100">三、SEC Form 8-K 自动解析流水台账（云端自动更新）</h2>
+            <p class="text-xs text-slate-400 mt-0.5">每当 Strategy 提交新 8-K，后台脚本自动提取回购金额、筹资来源与剩余授权追加至此</p>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto max-h-72 thin-scroll border border-slate-800 rounded-lg">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="sticky top-0 bg-slate-950 text-slate-400 border-b border-slate-800">
+              <tr>
+                <th class="py-2 px-2.5 font-medium">披露日</th>
+                <th class="py-2 px-2.5 font-medium">当周回购</th>
+                <th class="py-2 px-2.5 font-medium">回购均价</th>
+                <th class="py-2 px-2.5 font-medium">卖MSTR筹资</th>
+                <th class="py-2 px-2.5 font-medium">剩授权/上限</th>
+                <th class="py-2 px-2.5 font-medium">系统自动提取筹资与动作摘要</th>
+              </tr>
+            </thead>
+            <tbody id="ledgerBody" class="divide-y divide-slate-800/70 text-slate-200"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+  </div>
+
+  <script>
+    (function () {
+      let db = null;
+      let currentRange = 'all';
+      let subMode = 'buyback';
+      let hoverIndex = -1;
+      let pinnedIndex = -1;
+      let chartGeom = null;
+
+      const canvas = document.getElementById('mainCanvas');
+      const ctx = canvas.getContext('2d');
+
+      async function loadCloudData() {
+        const btn = document.getElementById('btnRefresh');
+        btn.textContent = '同步中...';
+        try {
+          const resp = await fetch('./data.json?t=' + Date.now(), { cache: 'no-store' });
+          db = await resp.json();
+          renderDashboard();
+        } catch (err) {
+          console.error('Failed to load data.json:', err);
+          document.getElementById('syncTimeLabel').textContent = '数据加载失败，请稍后重试';
+        } finally {
+          btn.textContent = '刷新实时数据';
+        }
+      }
+
+      function computeWaveSignal(L) {
+        const strc = L.strc_price;
+        const mnav = L.mnav;
+        const authRem = L.auth_remaining_100m;
+        const cash = L.usd_cash_100m;
+        const reserveYrs = L.usd_reserve_100m / 14.2;
+        const spreadTo98 = ((98.0 - strc) / strc) * 100;
+
+        // Firepower score (0 - 100): ability to fund aggressive buybacks right now
+        let fp = 0;
+        if (mnav >= 1.08) fp += 50;
+        else if (mnav >= 1.01) fp += 35;
+        else if (mnav >= 0.96) fp += 15;
+        else fp += 5;
+
+        if (authRem >= 8.0) fp += 25;
+        else if (authRem >= 3.0) fp += 12;
+        else fp += 3;
+
+        if (cash >= 4.0) fp += 15;
+        else if (cash >= 1.5) fp += 8;
+        else fp += 3;
+
+        if (L.btc_sold_recent) fp += 15; // Willingness to monetize BTC when mNAV < 1
+
+        fp = Math.min(100, fp);
+
+        let badge = '', badgeCls = '', headline = '', reason = '';
+
+        if (strc >= 97.5) {
+          badge = '🟠 波段止盈兑现区';
+          badgeCls = 'bg-amber-500/20 text-amber-300 border border-amber-500/40';
+          headline = `STRC 已回升至 $${strc.toFixed(2)}，接近 $98–$100 天花板，建议分批落袋止盈`;
+          reason = `当前距离 $100 面值仅剩 ${(100 - strc).toFixed(2)} 美元（且受 $101 赎回上限封顶），继续持有的价差弹性已极小，符合“回购拉升至九十几卖出”的波段纪律，可兑现利润等待下一轮脱锚。`;
+        } else if (reserveYrs < 1.2) {
+          badge = '🔴 信用风险规避';
+          badgeCls = 'bg-rose-500/20 text-rose-300 border border-rose-500/40';
+          headline = 'USD Reserve 利息安全垫低于警戒线，暂停波段抄底';
+          reason = '隔离付息储备不足以覆盖 1.2 年刚性支出，需防范停派股息风险。';
+        } else if (strc <= 95.5 && (mnav >= 1.02 || authRem >= 8.0 || cash >= 4.0 || L.btc_sold_recent)) {
+          badge = '🟢 强建仓击球信号（筹资就位 + 折价充足）';
+          badgeCls = 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+          headline = `筹资回购弹药已确认！STRC ($${strc.toFixed(2)}) 具备明确涨回 $98+ 的波段空间`;
+          reason = `一方面 47.5 亿美元 USD Reserve 锁死 ${reserveYrs.toFixed(1)} 年付息安全；另一方面当前 ${
+            mnav >= 1.02 ? `MSTR mNAV 已站上 ${mnav.toFixed(2)}x（可顺畅卖股筹资回购）` : '新授权/现金/卖币护盘资金已到位'
+          }，重现“6月底公布方案后一路推升至 $98+”的高胜率波段窗口（至 $98 纯价差 +${spreadTo98.toFixed(1)}%）。`;
+        } else if (strc <= 95.5 && mnav < 1.02) {
+          badge = '🟡 左侧观察埋伏期（有价差空间 · 等筹资发令枪）';
+          badgeCls = 'bg-sky-500/20 text-sky-300 border border-sky-500/40';
+          headline = `STRC ($${strc.toFixed(2)}) 已跌出波段空间，但 MSTR 破净 (${mnav.toFixed(2)}x) 暂卡住印股筹资脖子`;
+          reason = `兑付风险依然很低（USD Reserve 够付息 ${reserveYrs.toFixed(1)} 年），涨回 $98 有 +${spreadTo98.toFixed(1)}% 价差。但当前剩余授权仅 $${authRem.toFixed(2)}亿、USD Cash 仅 $${cash.toFixed(2)}亿，且 MSTR mNAV < 1x 叠加 11/30 MSCI 剔除抛压。策略上宜小仓试水吃 12.8% 日息，重点等两个重仓发令枪：① 新 8-K 宣布扩容授权并动用卖 BTC/补现；或 ② MSTR 消化抛压重返 1.02x mNAV！`;
+        } else {
+          badge = '🔵 持仓观望过渡区';
+          badgeCls = 'bg-slate-700 text-slate-200';
+          headline = `STRC 报 $${strc.toFixed(2)}，处于 $95.5–$97.5 中枢过渡带`;
+          reason = `折价空间中等（距 $98 约 +${spreadTo98.toFixed(1)}%），已建底仓者可继续拿日息等待推升至 $98 附近止盈；空仓者建议等待更深折价（<$94）或更强筹资催化。`;
+        }
+
+        return { fp, reserveYrs, spreadTo98, badge, badgeCls, headline, reason };
+      }
+
+      function renderDashboard() {
+        if (!db) return;
+        const L = db.latest;
+        const sig = computeWaveSignal(L);
+
+        document.getElementById('syncTimeLabel').textContent = `最近自动同步：${db.meta.updated_at_utc}`;
+        document.getElementById('last8kBadge').textContent = `最新已解析 8-K：${db.meta.last_8k_date}（覆盖至 ${db.meta.last_8k_period_end}）`;
+
+        // Hero Banner
+        const bEl = document.getElementById('sigPhaseBadge');
+        bEl.textContent = sig.badge;
+        bEl.className = `px-2.5 py-0.5 rounded text-xs font-semibold ${sig.badgeCls}`;
+        document.getElementById('sigHeadline').textContent = sig.headline;
+        document.getElementById('sigReason').textContent = sig.reason;
+
+        const effY = (L.strc_dividend_rate_pct / L.strc_price) * 100;
+        const total60d = sig.spreadTo98 + effY * (60 / 365);
+        document.getElementById('heroStrcPrice').textContent = `$${L.strc_price.toFixed(2)}`;
+        document.getElementById('heroEffYield').textContent = `有效年化 ${effY.toFixed(2)}%`;
+        document.getElementById('heroSpread98').textContent = `${sig.spreadTo98 >= 0 ? '+' : ''}${sig.spreadTo98.toFixed(2)}%`;
+        document.getElementById('heroTotal60d').textContent = `含60天息 ${total60d >= 0 ? '+' : ''}${total60d.toFixed(2)}%`;
+        document.getElementById('heroFirepower').textContent = `${sig.fp} / 100`;
+        document.getElementById('heroSafety').textContent = `现金垫 ${sig.reserveYrs.toFixed(1)} 年`;
+
+        // 4 Funding Channels
+        // Ch 1: MSTR ATM
+        document.getElementById('ch1Mnav').textContent = `${L.mnav.toFixed(2)}x`;
+        document.getElementById('ch1Mstr').textContent = `MSTR $${L.mstr_price.toFixed(2)}`;
+        const ch1St = document.getElementById('ch1Status');
+        if (L.mnav >= 1.05) {
+          ch1St.textContent = '畅通（可大额卖股）';
+          ch1St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400';
+        } else if (L.mnav >= 1.00) {
+          ch1St.textContent = '临界可用';
+          ch1St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400';
+        } else {
+          ch1St.textContent = '受阻（破净稀释）';
+          ch1St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400';
+        }
+        document.getElementById('ch1Bar').style.width = `${Math.max(8, Math.min(100, ((L.mnav - 0.8) / 0.5) * 100))}%`;
+        document.getElementById('ch1Desc').textContent =
+          `剩余 MSTR ATM 额度 $${L.mstr_atm_remaining_100m.toFixed(1)}亿。mNAV > 1.0x 时卖 MSTR 买折价 STRC 增厚含币量；最近一周卖股筹资 $${L.last_weekly_mstr_sold_m.toFixed(1)}M。`;
+
+        // Ch 2: Repurchase Auth
+        const usedPct = L.auth_cap_100m > 0 ? (L.cum_buyback_100m / L.auth_cap_100m) * 100 : 0;
+        document.getElementById('ch2Rem').textContent = `$${L.auth_remaining_100m.toFixed(2)}亿`;
+        document.getElementById('ch2Total').textContent = `总授权 $${L.auth_cap_100m.toFixed(0)}亿 (已用${usedPct.toFixed(0)}%)`;
+        const ch2St = document.getElementById('ch2Status');
+        if (L.auth_remaining_100m >= 6.0) {
+          ch2St.textContent = '额度充裕';
+          ch2St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400';
+        } else if (L.auth_remaining_100m >= 2.5) {
+          ch2St.textContent = '临近扩容节点';
+          ch2St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400';
+        } else {
+          ch2St.textContent = '即将耗尽';
+          ch2St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-rose-500/20 text-rose-400';
+        }
+        document.getElementById('ch2Bar').style.width = `${Math.min(100, (L.auth_remaining_100m / 15) * 100)}%`;
+        document.getElementById('ch2Desc').textContent =
+          `前两次均在消耗 80%–91% 时追加 $10亿。一旦新 8-K 宣布提至 $40亿+，代表新一轮回购战正式打响。`;
+
+        // Ch 3: USD Cash
+        document.getElementById('ch3Cash').textContent = `$${L.usd_cash_100m.toFixed(2)}亿`;
+        document.getElementById('ch3Reserve').textContent = `隔离付息池 $${L.usd_reserve_100m.toFixed(2)}亿`;
+        const ch3St = document.getElementById('ch3Status');
+        if (L.usd_cash_100m >= 4.0) {
+          ch3St.textContent = '弹药充沛';
+          ch3St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400';
+        } else {
+          ch3St.textContent = '存量偏薄';
+          ch3St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400';
+        }
+        document.getElementById('ch3Bar').style.width = `${Math.max(10, Math.min(100, (L.usd_cash_100m / 10) * 100))}%`;
+        document.getElementById('ch3Desc').textContent =
+          `USD Reserve 仅限付息禁用于回购；USD Cash + 每月约 $20M 储备利息可直接下场护盘，无需等发股。`;
+
+        // Ch 4: BTC Monetization
+        const btcValB = ((L.btc_holdings * L.btc_price) / 1e8).toFixed(0);
+        document.getElementById('ch4Btc').textContent = `$${L.btc_price.toLocaleString()}`;
+        document.getElementById('ch4Holdings').textContent = `${L.btc_holdings.toLocaleString()} 枚 ($${btcValB}亿)`;
+        const ch4St = document.getElementById('ch4Status');
+        if (L.btc_sold_recent) {
+          ch4St.textContent = '已激活卖币护盘';
+          ch4St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400';
+        } else {
+          ch4St.textContent = '待命后备弹药';
+          ch4St.className = 'px-1.5 py-0.5 rounded text-xs font-medium bg-sky-500/20 text-sky-400';
+        }
+        const covRatio = ((L.btc_holdings * L.btc_price) / 1e8 + L.usd_reserve_100m) / (67.1 + 16.0 + L.strc_shares_10k * 0.01 * 100);
+        document.getElementById('ch4Bar').style.width = `${Math.max(15, Math.min(100, (covRatio / 4.5) * 100))}%`;
+        document.getElementById('ch4Desc').textContent =
+          `全部 BTC 零质押，对 STRC 及优先债资产覆盖率达 ${covRatio.toFixed(2)}x。Saylor 11/19 已明牌 mNAV 低迷时可卖 BTC 折价买回 STRC。`;
+
+        // Sync calculator buy slider default to latest STRC price on first load
+        if (!window.__calcInited) {
+          window.__calcInited = true;
+          document.getElementById('calcBuy').value = Math.min(98, Math.max(74, L.strc_price));
+          updateWaveCalc();
+        }
+
+        // Render 8-K Table
+        const tbody = document.getElementById('ledgerBody');
+        tbody.innerHTML = db.filings_8k.map(f => `
+          <tr class="hover:bg-slate-800/50 transition">
+            <td class="py-2 px-2.5 whitespace-nowrap">
+              <a href="${f.url}" target="_blank" rel="noopener" class="text-sky-400 hover:underline font-medium">${f.filing_date} ↗</a>
+            </td>
+            <td class="py-2 px-2.5 font-semibold ${f.strc_repurchased_m > 0 ? 'text-emerald-400' : 'text-slate-500'}">
+              ${f.strc_repurchased_m > 0 ? '$' + f.strc_repurchased_m.toFixed(1) + 'M' : '-'}
+            </td>
+            <td class="py-2 px-2.5">${f.avg_buyback_price > 0 ? '$' + f.avg_buyback_price.toFixed(2) : '-'}</td>
+            <td class="py-2 px-2.5">${f.mstr_sold_m > 0 ? '$' + f.mstr_sold_m.toFixed(1) + 'M' : '-'}</td>
+            <td class="py-2 px-2.5 whitespace-nowrap">$${f.auth_rem_100m.toFixed(2)}亿 / $${f.auth_cap_100m.toFixed(0)}亿</td>
+            <td class="py-2 px-2.5 text-slate-300">${f.funding_note}</td>
+          </tr>
+        `).join('');
+
+        const hist = db.history;
+        updateReadout(hist[hist.length - 1]);
+        drawChart();
+      }
+
+      function getFilteredHistory() {
+        if (!db) return [];
+        if (currentRange === 'wave1') return db.history.filter(d => d.date >= '2026-06-01' && d.date <= '2026-09-30');
+        if (currentRange === 'recent') return db.history.filter(d => d.date >= '2026-09-20');
+        return db.history;
+      }
+
+      function updateReadout(d) {
+        if (!d) return;
+        const up98 = ((98.0 - d.strc) / d.strc) * 100;
+        document.getElementById('roDate').textContent = d.date;
+        document.getElementById('roStrc').textContent = `$${d.strc.toFixed(2)}`;
+        document.getElementById('roUpside98').textContent = `${up98 >= 0 ? '+' : ''}${up98.toFixed(1)}%`;
+        document.getElementById('roMnav').textContent = `${d.mstr ? '$' + d.mstr.toFixed(1) + ' / ' : ''}${d.mnav.toFixed(2)}x`;
+        document.getElementById('roBtc').textContent = `$${Math.round(d.btc).toLocaleString()}`;
+        document.getElementById('roBuy').textContent = `$${d.weeklyBuyM.toFixed(1)}M ($${d.cumBuyB.toFixed(1)}亿/$${d.authB}亿)`;
+      }
+
+      function drawChart() {
+        const data = getFilteredHistory();
+        if (!data.length) return;
+
+        const container = document.getElementById('chartContainer');
+        const rect = container.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const W = rect.width, H = rect.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const padL = 48, padR = 52, padT = 22, padB = 26, gapMid = 26;
+        const plotW = Math.max(80, W - padL - padR);
+        const totalH = H - padT - padB - gapMid;
+        const topH = Math.floor(totalH * 0.67);
+        const botH = totalH - topH;
+        const topY0 = padT, topY1 = padT + topH;
+        const botY0 = topY1 + gapMid, botY1 = botY0 + botH;
+
+        const showStrc = document.getElementById('chkStrc').checked;
+        const showMnav = document.getElementById('chkMnav').checked;
+        const showBtc = document.getElementById('chkBtc').checked;
+        const showBands = document.getElementById('chkBands').checked;
+
+        const tMin = new Date(data[0].date + 'T00:00:00').getTime();
+        const tMax = new Date(data[data.length - 1].date + 'T00:00:00').getTime();
+        const tSpan = Math.max(1, tMax - tMin);
+        const xOf = (ds) => data.length === 1 ? padL + plotW / 2 : padL + ((new Date(ds + 'T00:00:00').getTime() - tMin) / tSpan) * plotW;
+
+        const strcMin = 70, strcMax = 103;
+        const yStrc = (v) => topY1 - ((v - strcMin) / (strcMax - strcMin)) * topH;
+        const mnavMin = 0.85, mnavMax = 1.38;
+        const yMnav = (v) => topY1 - ((v - mnavMin) / (mnavMax - mnavMin)) * topH;
+        const btcMin = 50000, btcMax = 100000;
+        const yBtc = (v) => topY1 - ((v - btcMin) / (btcMax - btcMin)) * topH;
+
+        // Wave Profit Zone ($97.5 - $99.5) & Buy Zone ($84 - $93.8)
+        if (showBands) {
+          // Sell / Take-profit band
+          const yS1 = yStrc(99.5), yS2 = yStrc(97.5);
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
+          ctx.fillRect(padL, yS1, plotW, yS2 - yS1);
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.55)';
+          ctx.font = '10px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText('波段止盈带 ($97.5–$99.5)', padL + 6, yS1 + 10);
+
+          // Buy accumulation band
+          const yB1 = yStrc(93.8), yB2 = yStrc(84.0);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.07)';
+          ctx.fillRect(padL, yB1, plotW, yB2 - yB1);
+          ctx.fillStyle = 'rgba(52, 211, 153, 0.6)';
+          ctx.fillText('折价击球观察带 ($84–$93.8)', padL + 6, yB1 + 11);
+        }
+
+        // Grid & Left Y-Axis (STRC)
+        ctx.font = '11px sans-serif';
+        [75, 80, 85, 90, 95, 100].forEach(v => {
+          const y = yStrc(v);
+          ctx.strokeStyle = v === 100 ? 'rgba(245,158,11,0.45)' : 'rgba(148,163,184,0.12)';
+          ctx.setLineDash(v === 100 ? [5, 4] : []);
+          ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = v === 100 ? '#fbbf24' : '#94a3b8';
+          ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+          ctx.fillText(`$${v}`, padL - 6, y);
+        });
+
+        // Right Y-Axis (mNAV)
+        [0.90, 1.00, 1.10, 1.22, 1.30].forEach(v => {
+          const y = yMnav(v);
+          if (v === 1.00) {
+            ctx.strokeStyle = 'rgba(56,189,248,0.45)';
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          ctx.fillStyle = v === 1.00 ? '#38bdf8' : '#94a3b8';
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+          ctx.fillText(`${v.toFixed(2)}x`, padL + plotW + 6, y);
+        });
+
+        ctx.fillStyle = '#fbbf24'; ctx.textAlign = 'left';
+        ctx.fillText('STRC 股价 ($)', padL, topY0 - 10);
+        ctx.fillStyle = '#38bdf8'; ctx.textAlign = 'right';
+        ctx.fillText('MSTR mNAV (1.00x 印股筹资阈值)', padL + plotW, topY0 - 10);
+
+        if (showBtc) {
+          ctx.save();
+          ctx.strokeStyle = '#14b8a6'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.78;
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yBtc(Math.max(btcMin, Math.min(btcMax, d.btc)));
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        if (showMnav) {
+          const yOne = yMnav(1.0);
+          ctx.save();
+          ctx.beginPath(); ctx.rect(padL, yOne, plotW, topY1 - yOne); ctx.clip();
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.22)';
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yMnav(Math.max(mnavMin, Math.min(mnavMax, d.mnav)));
+            if (i === 0) ctx.moveTo(x, yOne);
+            ctx.lineTo(x, y);
+          });
+          ctx.lineTo(xOf(data[data.length - 1].date), yOne);
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+
+          ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2;
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yMnav(Math.max(mnavMin, Math.min(mnavMax, d.mnav)));
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        }
+
+        if (showStrc) {
+          ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2.6;
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yStrc(Math.max(strcMin, Math.min(strcMax, d.strc)));
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+
+          data.forEach(d => {
+            const x = xOf(d.date), y = yStrc(Math.max(strcMin, Math.min(strcMax, d.strc)));
+            ctx.fillStyle = d.strc <= 94 ? '#10b981' : d.strc >= 97.5 ? '#fbbf24' : '#f59e0b';
+            ctx.beginPath(); ctx.arc(x, y, d.tag ? 3.5 : 2, 0, Math.PI * 2); ctx.fill();
+          });
+        }
+
+        // Milestone Flags
+        let row = 0;
+        data.forEach(d => {
+          if (!d.tag) return;
+          const x = xOf(d.date);
+          const isAuth = d.tag.includes('$') && d.tag.includes('亿');
+          ctx.strokeStyle = isAuth ? 'rgba(56,189,248,0.5)' : 'rgba(148,163,184,0.3)';
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath(); ctx.moveTo(x, topY0); ctx.lineTo(x, botY1); ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.font = '10px sans-serif';
+          const tw = ctx.measureText(d.tag).width + 8;
+          const px = Math.max(padL + 2, Math.min(padL + plotW - tw - 2, x - tw / 2));
+          const py = topY0 + 20 + (row % 3) * 17;
+          row++;
+
+          ctx.fillStyle = '#0f172a';
+          ctx.strokeStyle = isAuth ? '#38bdf8' : 'rgba(148,163,184,0.35)';
+          ctx.beginPath(); ctx.roundRect(px, py, tw, 15, 3); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = isAuth ? '#38bdf8' : '#e2e8f0';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(d.tag, px + tw / 2, py + 7.5);
+        });
+
+        // Bottom Sub-Plot
+        ctx.strokeStyle = 'rgba(148,163,184,0.14)';
+        ctx.strokeRect(padL, botY0, plotW, botH);
+
+        if (subMode === 'buyback') {
+          const maxW = Math.max(250, ...data.map(d => d.weeklyBuyM));
+          const maxA = Math.max(32, ...data.map(d => Math.max(d.authB, d.cumBuyB) * 1.1));
+          const yBar = (v) => botY1 - (v / maxW) * botH;
+          const yCum = (v) => botY1 - (v / maxA) * botH;
+
+          ctx.font = '11px sans-serif';
+          ctx.fillStyle = '#10b981'; ctx.textAlign = 'left';
+          ctx.fillText('每周实盘回购 ($M 柱)', padL, botY0 - 9);
+          ctx.fillStyle = '#38bdf8'; ctx.textAlign = 'right';
+          ctx.fillText('累计回购消耗 vs 授权阶梯 ($亿)', padL + plotW, botY0 - 9);
+
+          [0, 120, 240].forEach(v => {
+            ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'right';
+            ctx.fillText(`$${v}M`, padL - 6, yBar(v));
+          });
+          [10, 20, 30, 40].forEach(v => {
+            if (v <= maxA) {
+              ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'left';
+              ctx.fillText(`$${v}亿`, padL + plotW + 6, yCum(v));
+            }
+          });
+
+          ctx.fillStyle = 'rgba(56,189,248,0.15)';
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yCum(d.cumBuyB);
+            if (i === 0) ctx.moveTo(x, botY1);
+            ctx.lineTo(x, y);
+          });
+          ctx.lineTo(xOf(data[data.length - 1].date), botY1);
+          ctx.closePath(); ctx.fill();
+
+          ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yCum(d.cumBuyB);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+
+          ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.8; ctx.setLineDash([5, 3]);
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = yCum(d.authB);
+            if (i === 0) ctx.moveTo(x, y);
+            else { ctx.lineTo(x, yCum(data[i - 1].authB)); ctx.lineTo(x, y); }
+          });
+          ctx.stroke(); ctx.setLineDash([]);
+
+          const bw = Math.max(4, Math.min(11, (plotW / data.length) * 0.55));
+          data.forEach(d => {
+            if (d.weeklyBuyM > 0) {
+              const x = xOf(d.date), y = yBar(d.weeklyBuyM);
+              ctx.fillStyle = '#10b981';
+              ctx.fillRect(x - bw / 2, y, bw, botY1 - y);
+            }
+          });
+        } else {
+          const sMin = 2000, sMax = 11500;
+          const ySup = (v) => botY1 - ((v - sMin) / (sMax - sMin)) * botH;
+          ctx.font = '11px sans-serif';
+          ctx.fillStyle = '#38bdf8'; ctx.textAlign = 'left';
+          ctx.fillText('STRC 流通股缩表曲线（万股）', padL, botY0 - 9);
+          ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2.2;
+          ctx.beginPath();
+          data.forEach((d, i) => {
+            const x = xOf(d.date), y = ySup(d.shares);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        }
+
+        // X Dates
+        ctx.fillStyle = '#94a3b8'; ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        const ticks = Math.min(data.length, Math.max(5, Math.floor(plotW / 90)));
+        for (let k = 0; k < ticks; k++) {
+          const idx = Math.round((k / Math.max(1, ticks - 1)) * (data.length - 1));
+          ctx.fillText(data[idx].date.slice(5), xOf(data[idx].date), botY1 + 6);
+        }
+
+        const act = hoverIndex >= 0 && hoverIndex < data.length ? hoverIndex : (pinnedIndex >= 0 && pinnedIndex < data.length ? pinnedIndex : -1);
+        if (act >= 0) {
+          const d = data[act], x = xOf(d.date);
+          ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+          ctx.beginPath(); ctx.moveTo(x, topY0); ctx.lineTo(x, botY1); ctx.stroke();
+          ctx.setLineDash([]);
+          if (showStrc) {
+            ctx.fillStyle = '#fbbf24';
+            ctx.beginPath(); ctx.arc(x, yStrc(Math.max(strcMin, Math.min(strcMax, d.strc))), 5, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        chartGeom = { data, xOf };
+      }
+
+      function onPointer(clientX, pin) {
+        if (!chartGeom || !chartGeom.data.length) return;
+        const rect = canvas.getBoundingClientRect();
+        const mx = clientX - rect.left;
+        let best = 0, bestD = Infinity;
+        chartGeom.data.forEach((d, i) => {
+          const dist = Math.abs(chartGeom.xOf(d.date) - mx);
+          if (dist < bestD) { bestD = dist; best = i; }
+        });
+        hoverIndex = best;
+        const item = chartGeom.data[best];
+        updateReadout(item);
+        if (pin && item.note) {
+          pinnedIndex = best;
+          document.getElementById('noteToastText').textContent = `${item.date} ｜ STRC $${item.strc.toFixed(2)} · mNAV ${item.mnav.toFixed(2)}x —— ${item.note}`;
+          document.getElementById('noteToast').classList.remove('hidden');
+        }
+        drawChart();
+      }
+
+      canvas.addEventListener('mousemove', e => onPointer(e.clientX, false));
+      canvas.addEventListener('click', e => onPointer(e.clientX, true));
+      canvas.addEventListener('touchmove', e => { if (e.touches[0]) onPointer(e.touches[0].clientX, false); }, { passive: true });
+      canvas.addEventListener('mouseleave', () => {
+        hoverIndex = -1;
+        if (db) updateReadout(db.history[db.history.length - 1]);
+        drawChart();
+      });
+
+      document.getElementById('closeToast').addEventListener('click', () => {
+        pinnedIndex = -1;
+        document.getElementById('noteToast').classList.add('hidden');
+        drawChart();
+      });
+
+      document.querySelectorAll('.range-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentRange = btn.dataset.range;
+          pinnedIndex = -1;
+          document.querySelectorAll('.range-btn').forEach(b => {
+            b.className = b === btn
+              ? 'range-btn px-2.5 py-1 rounded text-xs font-medium bg-sky-600 text-white transition'
+              : 'range-btn px-2.5 py-1 rounded text-xs font-medium border border-slate-700 text-slate-300 hover:text-white transition';
+          });
+          drawChart();
+        });
+      });
+
+      ['chkStrc', 'chkMnav', 'chkBtc', 'chkBands'].forEach(id => {
+        document.getElementById(id).addEventListener('change', drawChart);
+      });
+
+      document.getElementById('subModeBuyback').addEventListener('click', () => {
+        subMode = 'buyback';
+        document.getElementById('subModeBuyback').className = 'px-2 py-0.5 text-xs font-medium bg-slate-800 text-white';
+        document.getElementById('subModeSupply').className = 'px-2 py-0.5 text-xs font-medium text-slate-400 hover:text-white';
+        drawChart();
+      });
+      document.getElementById('subModeSupply').addEventListener('click', () => {
+        subMode = 'supply';
+        document.getElementById('subModeSupply').className = 'px-2 py-0.5 text-xs font-medium bg-slate-800 text-white';
+        document.getElementById('subModeBuyback').className = 'px-2 py-0.5 text-xs font-medium text-slate-400 hover:text-white';
+        drawChart();
+      });
+
+      function updateWaveCalc() {
+        const buy = parseFloat(document.getElementById('calcBuy').value);
+        const sell = parseFloat(document.getElementById('calcSell').value);
+        const days = parseInt(document.getElementById('calcDays').value, 10);
+
+        document.getElementById('calcBuyLbl').textContent = `$${buy.toFixed(2)}`;
+        document.getElementById('calcSellLbl').textContent = `$${sell.toFixed(2)}`;
+        document.getElementById('calcDaysLbl').textContent = `${days} 天`;
+
+        const capUsd = sell - buy;
+        const capPct = (capUsd / buy) * 100;
+        const divUsd = 12.0 * (days / 365);
+        const divPct = (divUsd / buy) * 100;
+        const totalPct = capPct + divPct;
+        const annPct = totalPct * (365 / days);
+
+        document.getElementById('calcCapPct').textContent = `${capPct >= 0 ? '+' : ''}${capPct.toFixed(2)}%`;
+        document.getElementById('calcCapUsd').textContent = `每股价差 ${capUsd >= 0 ? '+' : ''}$${capUsd.toFixed(2)}`;
+        document.getElementById('calcDivPct').textContent = `+${divPct.toFixed(2)}%`;
+        document.getElementById('calcDivUsd').textContent = `每股收息 +$${divUsd.toFixed(2)}`;
+        document.getElementById('calcTotalPct').textContent = `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(2)}%`;
+        document.getElementById('calcAnnNote').textContent = `折合年化回报率 ${annPct >= 0 ? '+' : ''}${annPct.toFixed(1)}%`;
+      }
+
+      ['calcBuy', 'calcSell', 'calcDays'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updateWaveCalc);
+      });
+
+      document.getElementById('btnRefresh').addEventListener('click', loadCloudData);
+
+      const ro = new ResizeObserver(() => drawChart());
+      ro.observe(document.getElementById('chartContainer'));
+
+      updateWaveCalc();
+      loadCloudData();
+    })();
+  </script>
+</body>
+</html>
