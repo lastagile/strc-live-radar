@@ -327,6 +327,16 @@ def parse_8k_document(
     notes = []
     if auth_cap_100m > prev_latest["auth_cap_100m"]:
         notes.append(f"🎯 回购授权扩容至 ${auth_cap_100m:.0f}亿！")
+    m_realloc = re.search(
+        r"reallocate up to \$([\d,\.]+)\s*(billion|million) from the USD Reserve to USD Cash",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if m_realloc:
+        rv = float(m_realloc.group(1).replace(",", ""))
+        ru = m_realloc.group(2).lower()
+        r_100m = rv * 10.0 if ru == "billion" else rv / 100.0
+        notes.append(f"🎯 划转 ${r_100m:.0f}亿 USD Reserve 至 USD Cash！")
     if mstr_sold_m > 0:
         notes.append(f"卖 MSTR 筹资 ${mstr_sold_m:.1f}M")
     if strc_rep_m > 0:
